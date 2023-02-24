@@ -2,6 +2,7 @@ main
 build
 toy
 toy.c
+todo
 
 # Prerequisites
 *.d

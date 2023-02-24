@@ -1,53 +1,39 @@
 #include "MateDb.h"
 
+typedef struct MateContext{
+	char ** cmdStrings;
+	size_t argsLen;
+}MateContext;
+
+MateContext mateCtx;
+
+#define UNKNOWN_COMMAND(cmd) do { \
+	char _buff[512] = {0}; \
+	snprintf(_buff, sizeof(_buff), "Uknown command: %s\n", cmd); \
+	fprintf(stderr, "%s\n", _buff); \
+} while(0);
+
 #define MATEDEF inline static
 
 extern HashTable * commandsTable;
+extern const RegisterDescriptor rdTable[NUM_REGISTERS];
 
-MATEDEF void MateDb_SetBreakpointAt(Session * debugger, intptr_t addr);
-MATEDEF void MateDb_DisableBreakPointAt(Session * debugger, intptr_t addr);
+MATEDEF void MateDb_SetBreakpointAt(Session * s, intptr_t addr);
+MATEDEF void MateDb_DisableBreakPointAt(Session * s, intptr_t addr);
 //MATEDEF void MateDb_DisableBreakPointId(Session * debugger, uint8_t id);
-MATEDEF void MateDb_InfoRegisters(Session * debugger);
+MATEDEF void MateDb_InfoRegisterAll(Session * s);
 
 MATEDEF void MateDb_DestroySession(Session * s);
 MATEDEF void MateDb_RunSession(Session * s);
 
-static const RegisterDescriptor rdTable[NUM_REGISTERS] = {
-    {r15, 15, "r15" },
-    {r14, 14, "r14" },
-    {r13, 13, "r13" },
-    {r12, 12, "r12" },
-    {rbp, 6, "rbp" },
-    {rbx, 3, "rbx" },
-    {r11, 11, "r11" },
-    {r10, 10, "r10" },
-    {r9,  9, "r9" },
-    {r8,  8, "r8" },
-    {rax, 0, "rax" },
-    {rcx, 2, "rcx" },
-    {rdx, 1, "rdx" },
-    {rsi, 4, "rsi" },
-    {rdi, 5, "rdi" },
-    {orig_rax, -1, "orig_rax" },
-    {rip, -1, "rip" },
-    {cs, 51, "cs" },
-    {rflags, 49, "eflags" },
-    {rsp, 7, "rsp" },
-    {ss, 52, "ss" },
-    {fs_base, 58, "fs_base" },
-    {gs_base, 59, "gs_base" },
-    {ds, 53, "ds" },
-    {es, 50, "es" },
-    {fs, 54, "fs" },
-    {gs, 55, "gs" },
-};
-
 void MateDb_Init(){
 	MateDb_InitCommands();
+	Registers_Init();
 };
 
 void MateDb_Quit(){
 	MateDb_QuitCommands();
+	Registers_Quit();
 };
 
 MATEDEF void MateDb_SetBreakpointAt(Session * s, intptr_t addr){
@@ -168,27 +154,33 @@ MATEDEF char ** split(const char * s, const char del, size_t * count){
 	return result;
 }
 
-MATEDEF void MateDb_ExecuteCmd(Session * s, const char * line){
-	assert(s != NULL);
-	assert(line != NULL);
+MATEDEF void MateDb_Info(Session * s){
+	if(strncmp("registers", mateCtx.cmdStrings[1], strlen("registers")) == 0){
+		MateDb_InfoRegisterAll(s);
+		return;
+	}else{
+		char errorString[128] = {0};
+		snprintf(errorString, 512, "info %s", mateCtx.cmdStrings[1]);
+		UNKNOWN_COMMAND(errorString);
+	}
+};
 
-	size_t len;
-	char ** strings = split(line, ' ', &len);
-	char * cmdName = strings[0];
+MATEDEF void MateDb_ExecuteCmd(Session * s){
+	assert(s != NULL);
+
+	char * cmdName = mateCtx.cmdStrings[0];
 
 	Command cmd = HashTable_Get(commandsTable, cmdName);
-	printf("->> %d\n", cmd);
+
 	if(cmd == NO_ELEM){
-		char errorString[512] = {0};
-		snprintf(errorString, sizeof(errorString), "Uknown command: %s\n", cmdName);
-		ERROR(errorString);
-		goto exit;
+		UNKNOWN_COMMAND(cmdName)
+		return;
 	};
 
 	switch(cmd){
 		case CMD_BREAK:
 			{
-				char * stringAddr = strings[1];
+				char * stringAddr = mateCtx.cmdStrings[1];
 				if(!stringAddr) DIE("addres for break not provided.");
 				intptr_t addr = strtol(stringAddr, NULL, 0);
 				int offset = 0x114e;
@@ -204,7 +196,11 @@ MATEDEF void MateDb_ExecuteCmd(Session * s, const char * line){
 			waitpid(s->pid, &waitStatus, 0);
 			break;
 		case CMD_INFO:
-			MateDb_InfoRegisters(s);
+			if(mateCtx.argsLen == 1){
+				ERROR("No arguments provided for info.");
+				break;
+			}
+			MateDb_Info(s);
 			break;
 		case CMD_QUIT:
 			//TODO: Right now debugee executes anyway, prevent that from happening
@@ -212,13 +208,6 @@ MATEDEF void MateDb_ExecuteCmd(Session * s, const char * line){
 			s->running = 0;
 			break;
 	};
-
-
-	exit:
-		for(size_t i = 0; i < len; i++){
-			free(strings[i]);
-		}
-		free(strings);;
 };
 
 MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
@@ -227,29 +216,61 @@ MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
 	int waitStatus;
 	waitpid(s->pid, &waitStatus, 0);
 
-	printf("Debuggin process %d \n", s->pid);
 	char * line;
-	while(s->running && (line = linenoise("test> ")) != NULL){
-		MateDb_ExecuteCmd(s, line);
+	printf("Debuggin process %d \n", s->pid);
+	while(s->running && (line = linenoise("<Mate>")) != NULL){
+
+		mateCtx.cmdStrings = split(line, ' ', &mateCtx.argsLen);
+
+		if(mateCtx.argsLen > 0){
+			MateDb_ExecuteCmd(s);
+		}
+
 
 		linenoiseHistoryAdd(line);
 		linenoiseFree(line);
+
+		for(size_t i = 0; i < mateCtx.argsLen; i++){
+			free(mateCtx.cmdStrings[i]);
+		}
+
+		free(mateCtx.cmdStrings);;
 	}
 
 }
 
-MATEDEF void MateDb_InfoRegisters(Session * s){
-	struct user_regs_struct regs;
-	errno = 0;
-	long res = ptrace(PTRACE_GETREGS, s->pid, NULL, &regs);
-	if(res < 0 && errno != 0){
-		DIE(strerror(errno))
-	};
+// info registers
+MATEDEF void MateDb_InfoRegisterAll(Session * s){
+	int readAll = 1;
 
-	typedef unsigned long long int lli;
-	for(size_t i = 0; i < NUM_REGISTERS; i++){
-		lli registerValue  = ((lli *)&regs)[i];
-		printf("%s -> %llx\n", rdTable[i].regName, registerValue);
+	size_t i = 0;
+	size_t count = NUM_REGISTERS;
+
+	if(mateCtx.argsLen > 2){
+		i = 2;
+		count = mateCtx.argsLen;
+		readAll = 0;
+	}
+
+	Registers_PumpValues(s->pid);
+
+	for(; i < count; i++){
+		const char * name;
+		uint64_t value;
+
+		if(readAll){
+			name = rdTable[i].name;
+		}else{
+			name = mateCtx.cmdStrings[i];
+		}
+		if(Registers_Read(name, &value) < 0){
+			char errorString[128] = {0};
+			snprintf(errorString, 128, "info registers %s", name);
+			UNKNOWN_COMMAND(errorString);
+			return;
+		}
+
+		printf("%s -> %lx\n", name, value);
 	};
 };
 
