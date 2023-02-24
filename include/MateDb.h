@@ -1,5 +1,6 @@
 #pragma once
 
+#include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include <sys/ptrace.h>
 #include <sys/user.h>
 #include <assert.h>
+#include <sys/personality.h>
 
 #include "commands.h"
 #include "Utils.h"
@@ -18,9 +20,6 @@
 
 #define MAX_BREAKPOINTS 32
 #define NUM_REGISTERS 27
-
-/*Note: Im not supossed to be creating many instances of the debugger.
- *The debugger is supossed te be launched once.*/
 
 typedef enum Register {
     rax, rbx, rcx, rdx,
@@ -38,14 +37,13 @@ typedef struct RegisterDescriptor{
 	const char * regName;
 }RegisterDescriptor;
 
-
 typedef struct Breakpoint{
 	intptr_t addr;
 	uint8_t savedByte; // saves the byte that is modified by int3 opcode
 	uint8_t id;
 }Breakpoint;
 
-typedef struct MateDb{
+typedef struct Session{
 	const char * programName;
 	pid_t pid;
 	int running;
@@ -53,16 +51,9 @@ typedef struct MateDb{
 	// keep all breakpoints in this array
 	Breakpoint breaks[MAX_BREAKPOINTS];
 	size_t breakCount;
+}Session;
 
-}MateDb;
+void MateDb_StartSession(const char * programName);
+void MateDb_Init();
+void MateDb_Quit();
 
-MateDb * MateDb_Create(const char * programName, int pid);
-void MateDb_Destroy(MateDb * debug);
-void MateDb_Run(MateDb * debug);
-
-/* Breakpoints functionality*/
-void MateDb_SetBreakpointAt(MateDb * debugger, intptr_t addr);
-void MateDb_DisableBreakPointAt(MateDb * debugger, intptr_t addr);
-void MateDb_DisableBreakPointId(MateDb * debugger, uint8_t id);
-/* Outputs the content of every register and their names*/
-void MateDb_InfoRegisters(MateDb * debugger);

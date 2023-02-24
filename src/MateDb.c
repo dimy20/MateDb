@@ -1,6 +1,16 @@
 #include "MateDb.h"
 
+#define MATEDEF inline static
+
 extern HashTable * commandsTable;
+
+MATEDEF void MateDb_SetBreakpointAt(Session * debugger, intptr_t addr);
+MATEDEF void MateDb_DisableBreakPointAt(Session * debugger, intptr_t addr);
+//MATEDEF void MateDb_DisableBreakPointId(Session * debugger, uint8_t id);
+MATEDEF void MateDb_InfoRegisters(Session * debugger);
+
+MATEDEF void MateDb_DestroySession(Session * s);
+MATEDEF void MateDb_RunSession(Session * s);
 
 static const RegisterDescriptor rdTable[NUM_REGISTERS] = {
     {r15, 15, "r15" },
@@ -32,19 +42,27 @@ static const RegisterDescriptor rdTable[NUM_REGISTERS] = {
     {gs, 55, "gs" },
 };
 
-void MateDb_SetBreakpointAt(MateDb * db, intptr_t addr){
+void MateDb_Init(){
+	MateDb_InitCommands();
+};
+
+void MateDb_Quit(){
+	MateDb_QuitCommands();
+};
+
+MATEDEF void MateDb_SetBreakpointAt(Session * s, intptr_t addr){
 	//printf("Setting breakpoint at %lx\n", *((uint64_t *)addr));
-	if(db->breakCount >= MAX_BREAKPOINTS){
+	if(s->breakCount >= MAX_BREAKPOINTS){
 		return;
 	};
 
 	// TODO: maybe use a hashtable?
-	for(size_t i = 0; i < db->breakCount; i++){
-		if(db->breaks[i].addr == addr) return;
+	for(size_t i = 0; i < s->breakCount; i++){
+		if(s->breaks[i].addr == addr) return;
 	}
 
 	errno = 0;
-	long data = ptrace(PTRACE_PEEKTEXT, db->pid, addr, NULL);
+	long data = ptrace(PTRACE_PEEKTEXT, s->pid, addr, NULL);
 
 	if(data < 0 && errno != 0){
 		DIE(strerror(errno));
@@ -56,26 +74,26 @@ void MateDb_SetBreakpointAt(MateDb * db, intptr_t addr){
 	uint64_t modifiedInstruction = (uint64_t)((data & ~0xff) | int3_Opcode);
 
 	errno = 0;
-	if(ptrace(PTRACE_POKEDATA, db->pid, addr, modifiedInstruction) < 0){
+	if(ptrace(PTRACE_POKEDATA, s->pid, addr, modifiedInstruction) < 0){
 		DIE(strerror(errno));
 	};
 
-	uint8_t id = (uint8_t)(db->breakCount + 1);
+	uint8_t id = (uint8_t)(s->breakCount + 1);
 
 	Breakpoint b = {addr, low, id};
-	db->breaks[db->breakCount++] = b;
+	s->breaks[s->breakCount++] = b;
 }
 
-void MateDb_DisableBreakPointAt(MateDb * db, intptr_t addr){
-	assert(db != NULL);
+MATEDEF void MateDb_DisableBreakPointAt(Session * s, intptr_t addr){
+	assert(s != NULL);
 
-	if(db->breakCount == 0) return;
+	if(s->breakCount == 0) return;
 
 	// TODO: make this a hashtable
 	int found = 0;
 	size_t i;
-	for(i = 0; i < db->breakCount; i++){
-		if(db->breaks[i].addr == addr){
+	for(i = 0; i < s->breakCount; i++){
+		if(s->breaks[i].addr == addr){
 			found = 1;
 			break;
 		}
@@ -84,10 +102,10 @@ void MateDb_DisableBreakPointAt(MateDb * db, intptr_t addr){
 
 	// restore original lower byte
 
-	Breakpoint bp = db->breaks[i];
+	Breakpoint bp = s->breaks[i];
 
 	errno = 0;
-	long data = ptrace(PTRACE_PEEKDATA, db->pid, addr, NULL);
+	long data = ptrace(PTRACE_PEEKDATA, s->pid, addr, NULL);
 	if(data < 0){
 		DIE(strerror(errno));
 	};
@@ -95,24 +113,20 @@ void MateDb_DisableBreakPointAt(MateDb * db, intptr_t addr){
 	uint64_t originalData = (uint64_t)((data & ~0xff) | bp.savedByte);
 
 	errno = 0;
-	if(ptrace(PTRACE_POKEDATA, db->pid, addr, originalData) < 0){
+	if(ptrace(PTRACE_POKEDATA, s->pid, addr, originalData) < 0){
 		DIE(strerror(errno));
 	};
 }
 
-
-MateDb * MateDb_Create(const char * programName, int pid){
-	MateDb * debug = malloc(sizeof(MateDb));
-	debug->pid = pid;
-	debug->programName = programName;
-	debug->breakCount = 0;
-
-	MateDb_InitCommands();
-
-	return debug;
+MATEDEF Session * MateDb_CreateSession(const char * programName, int pid){
+	Session * s = malloc(sizeof(Session));
+	s->pid = pid;
+	s->programName = programName;
+	s->breakCount = 0;
+	return s;
 };
 
-static char ** split(const char * s, const char del, size_t * count){
+MATEDEF char ** split(const char * s, const char del, size_t * count){
 	if(s == NULL){
 		*count = 0;
 		return NULL;
@@ -154,8 +168,8 @@ static char ** split(const char * s, const char del, size_t * count){
 	return result;
 }
 
-static void MateDb_ExecuteCmd(MateDb * db, const char * line){
-	assert(db != NULL);
+MATEDEF void MateDb_ExecuteCmd(Session * s, const char * line){
+	assert(s != NULL);
 	assert(line != NULL);
 
 	size_t len;
@@ -178,24 +192,24 @@ static void MateDb_ExecuteCmd(MateDb * db, const char * line){
 				if(!stringAddr) DIE("addres for break not provided.");
 				intptr_t addr = strtol(stringAddr, NULL, 0);
 				int offset = 0x114e;
-				MateDb_SetBreakpointAt(db, addr + offset);
+				MateDb_SetBreakpointAt(s, addr + offset);
 				break;
 			}
 
 		case CMD_CONTINUE:
 			// continue execution
-			ptrace(PTRACE_CONT, db->pid, NULL, NULL);
+			ptrace(PTRACE_CONT, s->pid, NULL, NULL);
 			// block thread intil tracee is signaled
 			int waitStatus;
-			waitpid(db->pid, &waitStatus, 0);
+			waitpid(s->pid, &waitStatus, 0);
 			break;
 		case CMD_INFO:
-			MateDb_InfoRegisters(db);
+			MateDb_InfoRegisters(s);
 			break;
 		case CMD_QUIT:
 			//TODO: Right now debugee executes anyway, prevent that from happening
 			//and exit the program directly
-			db->running = 0;
+			s->running = 0;
 			break;
 	};
 
@@ -207,16 +221,16 @@ static void MateDb_ExecuteCmd(MateDb * db, const char * line){
 		free(strings);;
 };
 
-void MateDb_Run(MateDb * db){ // wait for change of state
-	db->running = 1;
+MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
+	s->running = 1;
 
 	int waitStatus;
-	waitpid(db->pid, &waitStatus, 0);
+	waitpid(s->pid, &waitStatus, 0);
 
-	printf("Debuggin process %d \n", db->pid);
+	printf("Debuggin process %d \n", s->pid);
 	char * line;
-	while(db->running && (line = linenoise("test> ")) != NULL){
-		MateDb_ExecuteCmd(db, line);
+	while(s->running && (line = linenoise("test> ")) != NULL){
+		MateDb_ExecuteCmd(s, line);
 
 		linenoiseHistoryAdd(line);
 		linenoiseFree(line);
@@ -224,10 +238,10 @@ void MateDb_Run(MateDb * db){ // wait for change of state
 
 }
 
-void MateDb_InfoRegisters(MateDb * db){
+MATEDEF void MateDb_InfoRegisters(Session * s){
 	struct user_regs_struct regs;
 	errno = 0;
-	long res = ptrace(PTRACE_GETREGS, db->pid, NULL, &regs);
+	long res = ptrace(PTRACE_GETREGS, s->pid, NULL, &regs);
 	if(res < 0 && errno != 0){
 		DIE(strerror(errno))
 	};
@@ -239,7 +253,23 @@ void MateDb_InfoRegisters(MateDb * db){
 	};
 };
 
-void MateDb_Destroy(MateDb * db){
-	free(db);
-	MateDb_QuitCommands();
-};
+MATEDEF void MateDb_DestroySession(Session * s){ free(s); };
+
+void MateDb_StartSession(const char * prog){
+	Session * s;
+	pid_t pid = fork();
+
+	s = MateDb_CreateSession(prog, pid);
+
+	if(pid == 0){
+		personality(ADDR_NO_RANDOMIZE);
+		errno = 0;
+		if(ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0){
+			DIE(strerror(errno));
+		}
+		execl(prog, prog, NULL);
+	}else{
+		MateDb_RunSession(s);
+		MateDb_DestroySession(s);
+	}
+}

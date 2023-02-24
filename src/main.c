@@ -8,28 +8,12 @@
 #include "MateDb.h"
 
 int main(int argc, char ** argv){
-	MateDb * db;
 	if(argc < 2){
-		DIE("Provide a program name as argument");
+		DIE("Error: No program name provided.");
 	}
-
 	char * prog = argv[1];
-
-	pid_t pid = fork();
-
-	db = MateDb_Create(prog, pid);
-
-	if(pid == 0){
-		personality(ADDR_NO_RANDOMIZE);
-		errno = 0;
-		if(ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0){
-			DIE(strerror(errno));
-		}
-		execl(prog, prog, NULL);
-	}else{
-		MateDb_Run(db);
-		MateDb_Destroy(db);
-	}
-
+	MateDb_Init();
+	MateDb_StartSession(prog);
+	MateDb_Quit();
 	return 0;
 }
