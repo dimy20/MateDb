@@ -50,13 +50,15 @@ void Registers_Init(){
 	};
 }
 
+
 void Registers_PumpValues(pid_t pid){
 	errno = 0;
 	long res = ptrace(PTRACE_GETREGS, pid, NULL, &regs);
 	if(res < 0 && errno != 0){
 		DIE(strerror(errno))
 	};
-};
+
+}
 
 int Registers_Read(const char * rString, uint64_t * value){
 	*value = 0;
@@ -65,8 +67,28 @@ int Registers_Read(const char * rString, uint64_t * value){
 	if(r == NO_ELEM) return r;
 
 	*value = ((uint64_t  *)&regs)[r];
+
 	return 1;
-};
+}
+
+uint32_t Registers_Write(pid_t pid, const char * regName, uint64_t value){ 
+	//Registers_PumpValues();
+	struct user_regs_struct newRegs = regs;
+	int r = HashTable_Get(regStrings, regName);
+
+	if(r == NO_ELEM){
+		return REG_INVALID_NAME;
+	}
+
+	((uint64_t *)&newRegs)[r] = value;
+
+	errno = 0;
+	if(ptrace(PTRACE_SETREGS, pid, NULL, &newRegs) < 0 && errno != 0){
+		DIE(strerror(errno))
+	}
+
+	return 0;
+}
 
 void Registers_Quit(){
 	HashTable_Destroy(regStrings);

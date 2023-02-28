@@ -5,7 +5,7 @@ SRC_DIR = src
 INCLUDE_DIR = include
 BUILD_DIR = build
 
-CFLAGS = -g -Werror -Wall -Wconversion $(foreach D, $(INCLUDE_DIR), -I$(D))
+CFLAGS = -std=c11 -g -pedantic -Werror -Wall -Wconversion $(foreach D, $(INCLUDE_DIR), -I$(D))
 LDFLAGS = -lm
 
 SRCS = $(shell find $(SRC_DIR) -name '*.c')

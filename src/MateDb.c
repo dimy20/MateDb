@@ -26,15 +26,17 @@ MATEDEF void MateDb_InfoRegisterAll(Session * s);
 MATEDEF void MateDb_DestroySession(Session * s);
 MATEDEF void MateDb_RunSession(Session * s);
 
+MATEDEF void MateDb_Set(Session * s);
+
 void MateDb_Init(){
 	MateDb_InitCommands();
 	Registers_Init();
-};
+}
 
 void MateDb_Quit(){
 	MateDb_QuitCommands();
 	Registers_Quit();
-};
+}
 
 MATEDEF void MateDb_SetBreakpointAt(Session * s, intptr_t addr){
 	//printf("Setting breakpoint at %lx\n", *((uint64_t *)addr));
@@ -110,7 +112,7 @@ MATEDEF Session * MateDb_CreateSession(const char * programName, int pid){
 	s->programName = programName;
 	s->breakCount = 0;
 	return s;
-};
+}
 
 MATEDEF char ** split(const char * s, const char del, size_t * count){
 	if(s == NULL){
@@ -155,7 +157,7 @@ MATEDEF char ** split(const char * s, const char del, size_t * count){
 }
 
 MATEDEF void MateDb_Info(Session * s){
-	if(strncmp("registers", mateCtx.cmdStrings[1], strlen("registers")) == 0){
+	if(strncmp(CMD_REGISTERS_STR, mateCtx.cmdStrings[1], strlen("registers")) == 0){
 		MateDb_InfoRegisterAll(s);
 		return;
 	}else{
@@ -163,7 +165,7 @@ MATEDEF void MateDb_Info(Session * s){
 		snprintf(errorString, 512, "info %s", mateCtx.cmdStrings[1]);
 		UNKNOWN_COMMAND(errorString);
 	}
-};
+}
 
 MATEDEF void MateDb_ExecuteCmd(Session * s){
 	assert(s != NULL);
@@ -202,13 +204,18 @@ MATEDEF void MateDb_ExecuteCmd(Session * s){
 			}
 			MateDb_Info(s);
 			break;
+		case CMD_SET:
+			MateDb_Set(s);
+			break;
 		case CMD_QUIT:
 			//TODO: Right now debugee executes anyway, prevent that from happening
 			//and exit the program directly
 			s->running = 0;
 			break;
+		default:
+			break;
 	};
-};
+}
 
 MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
 	s->running = 1;
@@ -226,7 +233,6 @@ MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
 			MateDb_ExecuteCmd(s);
 		}
 
-
 		linenoiseHistoryAdd(line);
 		linenoiseFree(line);
 
@@ -239,6 +245,7 @@ MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
 
 }
 
+// rax -> eax, ax, [ah, al]
 // info registers
 MATEDEF void MateDb_InfoRegisterAll(Session * s){
 	int readAll = 1;
@@ -270,11 +277,11 @@ MATEDEF void MateDb_InfoRegisterAll(Session * s){
 			return;
 		}
 
-		printf("%s -> %lx\n", name, value);
+		printf("%s -> 0x%lx\n", name, value);
 	};
-};
+}
 
-MATEDEF void MateDb_DestroySession(Session * s){ free(s); };
+MATEDEF void MateDb_DestroySession(Session * s){ free(s); }
 
 void MateDb_StartSession(const char * prog){
 	Session * s;
@@ -294,3 +301,54 @@ void MateDb_StartSession(const char * prog){
 		MateDb_DestroySession(s);
 	}
 }
+
+MATEDEF void MateDb_Set(Session * s){
+	char ** strings = mateCtx.cmdStrings;
+	size_t len = mateCtx.argsLen;
+	if(len < 2) ERROR_RET("Not enough arguments for set");
+
+	if(strncmp(CMD_REGISTERS_STR, strings[1], strlen(CMD_REGISTERS_STR)) == 0){
+		if(len < 4) ERROR_RET("No enought arguments for set registers");
+		char * regName = strings[2];
+		char * end;
+		uint64_t value = strtoull(strings[3], &end, 0);
+		if(*end != '\0'){
+			char errLog[128] = {0};
+			snprintf(errLog, 128, "Invalid value: %s\n", strings[3]);
+			ERROR_RET(errLog);
+		}
+
+		uint32_t err;
+		if((err = Registers_Write(s->pid, regName, value)) !=  0){
+			if(err & REG_INVALID_NAME){
+				char errLog[128] = {0};
+				snprintf(errLog, 128,"%s is not a valid register name.\n", strings[2]);
+				ERROR_RET(errLog);
+			}
+		};
+	};
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

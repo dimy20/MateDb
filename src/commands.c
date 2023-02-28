@@ -13,6 +13,8 @@ void MateDb_InitCommands(){
 	HashTable_Insert(&commandsTable, CMD_BREAK_STR, CMD_BREAK);
 	HashTable_Insert(&commandsTable, CMD_INFO_STR, CMD_INFO);
 	HashTable_Insert(&commandsTable, CMD_QUIT_STR, CMD_QUIT);
+	HashTable_Insert(&commandsTable, CMD_SET_STR, CMD_SET);
+	HashTable_Insert(&commandsTable, CMD_REGISTERS_STR, CMD_REGISTERS);
 
 	commandsInitialized = 1;
 };

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Utils.h"
+#include <sys/types.h>
+
 typedef enum Register{
   r15, r14,     r13,    r12,
   rbp, rbx,     r11,    r10,
@@ -21,5 +24,6 @@ void Registers_Init();
 void Registers_Quit();
 
 int Registers_Read(const char * rString, uint64_t * value);
+uint32_t Registers_Write(pid_t pid, const char * regName, uint64_t value);
 
 void Registers_PumpValues(pid_t pid);
