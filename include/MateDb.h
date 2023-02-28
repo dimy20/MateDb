@@ -1,5 +1,7 @@
 #pragma once
 
+#define _GNU_SOURCE
+
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>

@@ -1,17 +1,14 @@
 #include "MateDb.h"
 
+typedef void (*cmdAction)(Session * s);
+static cmdAction cmdHandlers[NUM_COMMANDS];
+
 typedef struct MateContext{
 	char ** cmdStrings;
 	size_t argsLen;
 }MateContext;
 
 MateContext mateCtx;
-
-#define UNKNOWN_COMMAND(cmd) do { \
-	char _buff[512] = {0}; \
-	snprintf(_buff, sizeof(_buff), "Uknown command: %s\n", cmd); \
-	fprintf(stderr, "%s\n", _buff); \
-} while(0);
 
 #define MATEDEF inline static
 
@@ -28,14 +25,77 @@ MATEDEF void MateDb_RunSession(Session * s);
 
 MATEDEF void MateDb_Set(Session * s);
 
+MATEDEF void MateDb_InfoMappings(Session * s);
+
+MATEDEF void MateDb_Breakpoint(Session * s);
+MATEDEF void MateDb_Continue(Session * s);
+MATEDEF void MateDb_Info(Session * s);
+
+
 void MateDb_Init(){
 	MateDb_InitCommands();
+
+	cmdHandlers[CMD_SET] = &MateDb_Set;
+	cmdHandlers[CMD_BREAK] = &MateDb_Breakpoint;
+	cmdHandlers[CMD_INFO] = &MateDb_Info;
+	cmdHandlers[CMD_CONTINUE] = &MateDb_Continue;
+
 	Registers_Init();
 }
 
 void MateDb_Quit(){
 	MateDb_QuitCommands();
 	Registers_Quit();
+}
+
+MATEDEF uint32_t MateDb_ReadMemory(pid_t pid, intptr_t addr, uint64_t ** buffer, size_t count){
+	char filename[128] = {0};
+	snprintf(filename, 128, "/proc/%d/mem", pid);
+	FILE * f = fopen(filename, "r");
+
+	if(f == NULL){
+		ERROR(strerror(errno));
+		return 1;
+	}
+
+	if(fseek(f, addr, SEEK_SET) < 0){
+		ERROR(strerror(errno));
+	}
+
+	int fd = fileno(f);
+
+	*buffer = malloc(count); // TODO: set a limit to this?
+
+	ssize_t n = (int)read(fd, *buffer, count);
+
+	if(n < 0){
+		ERROR(strerror(errno));
+		return ERROR_MEMORY_READ;
+	};
+
+	fclose(f);
+	return NO_ERROR;
+}
+
+MATEDEF uint32_t MateDb_WriteMemory(pid_t pid, intptr_t addr, uint64_t value){
+	UNIMPLEMENTED
+}
+
+MATEDEF void MateDb_Breakpoint(Session * s){
+	char ** strings = mateCtx.cmdStrings;
+	size_t len = mateCtx.argsLen;
+	if(len < 2){
+		ERROR_RET("Provide an adress to break at.");
+	}
+
+	char * end;
+	intptr_t addr = strtol(strings[1], &end, 0);
+	if(*end != '\0'){
+		ERROR_RET("Bad address");
+	}
+
+	MateDb_SetBreakpointAt(s, addr);
+
 }
 
 MATEDEF void MateDb_SetBreakpointAt(Session * s, intptr_t addr){
@@ -157,15 +217,49 @@ MATEDEF char ** split(const char * s, const char del, size_t * count){
 }
 
 MATEDEF void MateDb_Info(Session * s){
-	if(strncmp(CMD_REGISTERS_STR, mateCtx.cmdStrings[1], strlen("registers")) == 0){
+	char ** strings = mateCtx.cmdStrings;
+	size_t len = mateCtx.argsLen;
+
+	if(len < 2)
+		ERROR_RET("Not enough arguments for info");
+
+	Command cmd = HashTable_Get(commandsTable, strings[1]);
+
+	if(cmd == NO_ELEM){
+		char errorString[128] = {0};
+		snprintf(errorString, 128, "info %s", mateCtx.cmdStrings[1]);
+		UNKNOWN_COMMAND(errorString);
+	};
+
+	if(cmd == CMD_REGISTERS){
 		MateDb_InfoRegisterAll(s);
 		return;
-	}else{
-		char errorString[128] = {0};
-		snprintf(errorString, 512, "info %s", mateCtx.cmdStrings[1]);
-		UNKNOWN_COMMAND(errorString);
+	};
+
+	if(cmd == CMD_MEMORY){
+		if(len < 3){
+			ERROR_RET("info memory <mem-addr>\n");
+		}
+
+		char * end;
+		intptr_t addr = strtol(strings[2], &end, 0);
+		if(*end != '\0'){
+			ERROR_RET("Bad address.\n");
+		}
+
+		uint64_t * data;
+		MateDb_ReadMemory(s->pid, addr, &data, 1);
+		printf("value at 0x%lx -> 0x%lx\n", addr, *data);
+
+		free(data);
+
+	};
+
+	if(cmd == CMD_MAPPINGS){
+		MateDb_InfoMappings(s);
 	}
 }
+// <top-cmd> <sub-cmd> args...
 
 MATEDEF void MateDb_ExecuteCmd(Session * s){
 	assert(s != NULL);
@@ -179,42 +273,15 @@ MATEDEF void MateDb_ExecuteCmd(Session * s){
 		return;
 	};
 
-	switch(cmd){
-		case CMD_BREAK:
-			{
-				char * stringAddr = mateCtx.cmdStrings[1];
-				if(!stringAddr) DIE("addres for break not provided.");
-				intptr_t addr = strtol(stringAddr, NULL, 0);
-				int offset = 0x114e;
-				MateDb_SetBreakpointAt(s, addr + offset);
-				break;
-			}
-
-		case CMD_CONTINUE:
-			// continue execution
-			ptrace(PTRACE_CONT, s->pid, NULL, NULL);
-			// block thread intil tracee is signaled
-			int waitStatus;
-			waitpid(s->pid, &waitStatus, 0);
-			break;
-		case CMD_INFO:
-			if(mateCtx.argsLen == 1){
-				ERROR("No arguments provided for info.");
-				break;
-			}
-			MateDb_Info(s);
-			break;
-		case CMD_SET:
-			MateDb_Set(s);
-			break;
-		case CMD_QUIT:
-			//TODO: Right now debugee executes anyway, prevent that from happening
-			//and exit the program directly
-			s->running = 0;
-			break;
-		default:
-			break;
+	if(cmd == CMD_QUIT){
+		s->running = 0;
+		return;
 	};
+
+	cmdAction fn = cmdHandlers[cmd];
+	assert(fn != NULL && "NULL cmd function handler");
+
+	fn(s);
 }
 
 MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
@@ -307,8 +374,16 @@ MATEDEF void MateDb_Set(Session * s){
 	size_t len = mateCtx.argsLen;
 	if(len < 2) ERROR_RET("Not enough arguments for set");
 
-	if(strncmp(CMD_REGISTERS_STR, strings[1], strlen(CMD_REGISTERS_STR)) == 0){
-		if(len < 4) ERROR_RET("No enought arguments for set registers");
+	Command cmd = HashTable_Get(commandsTable, strings[1]);
+
+	if(cmd == NO_ELEM){
+		char errorString[128] = {0};
+		snprintf(errorString, 128, "Set %s", strings[1]);
+		UNKNOWN_COMMAND(errorString);
+	}
+
+	if(cmd == CMD_REGISTERS){
+		if(len < 4) ERROR_RET("No enough arguments for set registers");
 		char * regName = strings[2];
 		char * end;
 		uint64_t value = strtoull(strings[3], &end, 0);
@@ -326,29 +401,37 @@ MATEDEF void MateDb_Set(Session * s){
 				ERROR_RET(errLog);
 			}
 		};
-	};
+	}
+
+	if(cmd == CMD_MEMORY){
+		UNIMPLEMENTED
+	}
 }
 
+MATEDEF void MateDb_InfoMappings(Session * s){
+	char filename[128] = {0};
+	snprintf(filename, 128, "/proc/%d/maps", s->pid);
+	printf("%s\n", filename);
 
+    FILE * f = fopen(filename, "r");
+	if(f == NULL){
+		ERROR_RET(strerror(errno));
+	};
 
+	char buffer[256] = {0};
 
+	while(fgets(buffer, 256, f)){
+		printf("%s", buffer);
 
+		memset(buffer, 0, 256);
+	};
 
+	fclose(f);
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+MATEDEF void MateDb_Continue(Session * s){
+	ptrace(PTRACE_CONT, s->pid, NULL, NULL);
+	// block thread intil tracee is signaled
+	int waitStatus;
+	waitpid(s->pid, &waitStatus, 0);
+}
