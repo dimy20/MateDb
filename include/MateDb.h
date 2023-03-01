@@ -17,7 +17,6 @@
 
 #include "commands.h"
 #include "Utils.h"
-#include "linenoise.h"
 #include "hash_table.h"
 #include "Registers.h"
 
