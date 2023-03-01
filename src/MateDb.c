@@ -291,6 +291,7 @@ void MateDb_ExecuteCmd(){
 	for(size_t i = 0; i < ctx.argsLen; i++){
 		free(ctx.cmdStrings[i]);
 	}
+	free(ctx.cmdStrings);
 }
 
 MATEDEF void MateDb_InfoRegisterAll(Session * s){

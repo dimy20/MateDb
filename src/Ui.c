@@ -29,7 +29,7 @@ void UI_Init(){
 		DIE(TTF_GetError());
 	};
 
-	TTF_Font * font = TTF_OpenFont("04B_11__.TTF", 25);
+	TTF_Font * font = TTF_OpenFont("assets/04B_11__.TTF", 25);
 
 	if(!font){
 		DIE(TTF_GetError());
@@ -46,10 +46,12 @@ void UI_Init(){
 void UI_Quit(){
 	MateDb_Quit();
 
-	SDL_DestroyWindow(ctx.window);
+	SDL_DestroyTexture(ctx.textTexture);
 	SDL_DestroyRenderer(ctx.renderer);
+	SDL_DestroyWindow(ctx.window);
 	TTF_CloseFont(ctx.font);
 
+	SDL_QuitSubSystem(SDL_INIT_VIDEO);
 	TTF_Quit();
 	SDL_Quit();
 }
