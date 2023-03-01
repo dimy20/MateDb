@@ -24,6 +24,8 @@
 #define MAX_BREAKPOINTS 32
 #define NUM_REGISTERS 27
 
+typedef void (*Run)(void);
+
 typedef struct Breakpoint{
 	intptr_t addr;
 	uint8_t savedByte; // saves the byte that is modified by int3 opcode
@@ -40,7 +42,8 @@ typedef struct Session{
 	size_t breakCount;
 }Session;
 
-void MateDb_StartSession(const char * programName);
+void MateDb_StartSession(const char * programName, Run run);
 void MateDb_Init();
 void MateDb_Quit();
+void MateDb_ExecuteCmd();
 

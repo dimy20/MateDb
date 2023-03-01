@@ -1,14 +1,11 @@
 #include "MateDb.h"
+#include "Context.h"
+
+Session * s;
+extern Context ctx;
 
 typedef void (*cmdAction)(Session * s);
 static cmdAction cmdHandlers[NUM_COMMANDS];
-
-typedef struct MateContext{
-	char ** cmdStrings;
-	size_t argsLen;
-}MateContext;
-
-MateContext mateCtx;
 
 #define MATEDEF inline static
 
@@ -21,7 +18,6 @@ MATEDEF void MateDb_DisableBreakPointAt(Session * s, intptr_t addr);
 MATEDEF void MateDb_InfoRegisterAll(Session * s);
 
 MATEDEF void MateDb_DestroySession(Session * s);
-MATEDEF void MateDb_RunSession(Session * s);
 
 MATEDEF void MateDb_Set(Session * s);
 
@@ -33,6 +29,7 @@ MATEDEF void MateDb_Info(Session * s);
 
 
 void MateDb_Init(){
+	/* MateDb */
 	MateDb_InitCommands();
 
 	cmdHandlers[CMD_SET] = &MateDb_Set;
@@ -41,11 +38,15 @@ void MateDb_Init(){
 	cmdHandlers[CMD_CONTINUE] = &MateDb_Continue;
 
 	Registers_Init();
+
+	ctx.cmdStrings = NULL;
+	ctx.argsLen = 0;
 }
 
 void MateDb_Quit(){
 	MateDb_QuitCommands();
 	Registers_Quit();
+
 }
 
 MATEDEF uint32_t MateDb_ReadMemory(pid_t pid, intptr_t addr, uint64_t ** buffer, size_t count){
@@ -82,8 +83,8 @@ MATEDEF uint32_t MateDb_WriteMemory(pid_t pid, intptr_t addr, uint64_t value){
 }
 
 MATEDEF void MateDb_Breakpoint(Session * s){
-	char ** strings = mateCtx.cmdStrings;
-	size_t len = mateCtx.argsLen;
+	char ** strings = ctx.cmdStrings;
+	size_t len = ctx.argsLen;
 	if(len < 2){
 		ERROR_RET("Provide an adress to break at.");
 	}
@@ -217,8 +218,8 @@ MATEDEF char ** split(const char * s, const char del, size_t * count){
 }
 
 MATEDEF void MateDb_Info(Session * s){
-	char ** strings = mateCtx.cmdStrings;
-	size_t len = mateCtx.argsLen;
+	char ** strings = ctx.cmdStrings;
+	size_t len = ctx.argsLen;
 
 	if(len < 2)
 		ERROR_RET("Not enough arguments for info");
@@ -227,7 +228,7 @@ MATEDEF void MateDb_Info(Session * s){
 
 	if(cmd == NO_ELEM){
 		char errorString[128] = {0};
-		snprintf(errorString, 128, "info %s", mateCtx.cmdStrings[1]);
+		snprintf(errorString, 128, "info %s", ctx.cmdStrings[1]);
 		UNKNOWN_COMMAND(errorString);
 	};
 
@@ -259,12 +260,16 @@ MATEDEF void MateDb_Info(Session * s){
 		MateDb_InfoMappings(s);
 	}
 }
-// <top-cmd> <sub-cmd> args...
 
-MATEDEF void MateDb_ExecuteCmd(Session * s){
+void MateDb_ExecuteCmd(){
 	assert(s != NULL);
 
-	char * cmdName = mateCtx.cmdStrings[0];
+	ctx.cmdStrings = split(ctx.inputText, ' ', &ctx.argsLen);
+
+	if(ctx.argsLen < 1) return;
+
+	char * cmdName = ctx.cmdStrings[0];
+
 
 	Command cmd = HashTable_Get(commandsTable, cmdName);
 
@@ -282,47 +287,21 @@ MATEDEF void MateDb_ExecuteCmd(Session * s){
 	assert(fn != NULL && "NULL cmd function handler");
 
 	fn(s);
-}
 
-MATEDEF void MateDb_RunSession(Session * s){ // wait for change of state
-	s->running = 1;
-
-	int waitStatus;
-	waitpid(s->pid, &waitStatus, 0);
-
-	char * line;
-	printf("Debuggin process %d \n", s->pid);
-	while(s->running && (line = linenoise("<Mate>")) != NULL){
-
-		mateCtx.cmdStrings = split(line, ' ', &mateCtx.argsLen);
-
-		if(mateCtx.argsLen > 0){
-			MateDb_ExecuteCmd(s);
-		}
-
-		linenoiseHistoryAdd(line);
-		linenoiseFree(line);
-
-		for(size_t i = 0; i < mateCtx.argsLen; i++){
-			free(mateCtx.cmdStrings[i]);
-		}
-
-		free(mateCtx.cmdStrings);;
+	for(size_t i = 0; i < ctx.argsLen; i++){
+		free(ctx.cmdStrings[i]);
 	}
-
 }
 
-// rax -> eax, ax, [ah, al]
-// info registers
 MATEDEF void MateDb_InfoRegisterAll(Session * s){
 	int readAll = 1;
 
 	size_t i = 0;
 	size_t count = NUM_REGISTERS;
 
-	if(mateCtx.argsLen > 2){
+	if(ctx.argsLen > 2){
 		i = 2;
-		count = mateCtx.argsLen;
+		count = ctx.argsLen;
 		readAll = 0;
 	}
 
@@ -335,7 +314,7 @@ MATEDEF void MateDb_InfoRegisterAll(Session * s){
 		if(readAll){
 			name = rdTable[i].name;
 		}else{
-			name = mateCtx.cmdStrings[i];
+			name = ctx.cmdStrings[i];
 		}
 		if(Registers_Read(name, &value) < 0){
 			char errorString[128] = {0};
@@ -350,8 +329,7 @@ MATEDEF void MateDb_InfoRegisterAll(Session * s){
 
 MATEDEF void MateDb_DestroySession(Session * s){ free(s); }
 
-void MateDb_StartSession(const char * prog){
-	Session * s;
+void MateDb_StartSession(const char * prog, Run run){
 	pid_t pid = fork();
 
 	s = MateDb_CreateSession(prog, pid);
@@ -364,14 +342,19 @@ void MateDb_StartSession(const char * prog){
 		}
 		execl(prog, prog, NULL);
 	}else{
-		MateDb_RunSession(s);
+		int waitStatus;
+		waitpid(s->pid, &waitStatus, 0);
+
+		printf("Debuggin process %d \n", s->pid);
+		run();
+
 		MateDb_DestroySession(s);
 	}
 }
 
 MATEDEF void MateDb_Set(Session * s){
-	char ** strings = mateCtx.cmdStrings;
-	size_t len = mateCtx.argsLen;
+	char ** strings = ctx.cmdStrings;
+	size_t len = ctx.argsLen;
 	if(len < 2) ERROR_RET("Not enough arguments for set");
 
 	Command cmd = HashTable_Get(commandsTable, strings[1]);
