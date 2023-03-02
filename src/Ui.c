@@ -1,8 +1,4 @@
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
-#include <assert.h>
-#include "MateDb.h"
-#include "Context.h"
+#include "Ui.h"
 
 #define MATEDEF inline static
 Context ctx;
@@ -74,13 +70,15 @@ MATEDEF void UI_Update(){
 					break;
 				case SDLK_RETURN:
 					MateDb_ExecuteCmd();
+					memset(ctx.inputText, 0, MAX_INPUT_TEXT_SIZE);
+					ctx.count = 0;
 					break;
 			}
 
 		}
 
 		if(e.type == SDL_TEXTINPUT){
-			if(ctx.count < 1024){
+			if(ctx.count < MAX_INPUT_TEXT_SIZE){
 				ctx.inputText[ctx.count++] = *e.text.text;
 			}
 		}
@@ -89,21 +87,12 @@ MATEDEF void UI_Update(){
 }
 
 MATEDEF void UI_Render(){
-	SDL_Color color = { 255, 255, 255 };
-	SDL_Surface * surface = TTF_RenderText_Solid(ctx.font, ctx.inputText, color);
-	SDL_Texture * textTexture = SDL_CreateTextureFromSurface(ctx.renderer, surface);
-
-	SDL_FreeSurface(surface);
-
-	int W, H;
-
-	SDL_QueryTexture(textTexture, NULL, NULL, &W, &H);
-	SDL_Rect dst = {0, 0, W, H};
-
-	SDL_RenderCopy(ctx.renderer, textTexture, NULL, &dst);
+	MateDb_DrawText(ctx.inputText, 0, 0, 0xffffffff, DEFAULT_FONT);
 }
 
 MATEDEF void UI_RunInternal(){
+	MateDb_InitFont(DEFAULT_FONT, "./assets/04B_11__.TTF");
+
 	assert(ctx.initialized);
 	SDL_StartTextInput();
 
@@ -116,6 +105,7 @@ MATEDEF void UI_RunInternal(){
 
 		if(ctx.count > 0){
 			UI_Render();
+
 		}
 
 		SDL_RenderPresent(ctx.renderer);
